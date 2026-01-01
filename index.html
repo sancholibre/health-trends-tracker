@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Is This Health Trend Bullshit?</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'display': ['Space Grotesk', 'sans-serif'],
+                        'body': ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        'grade': {
+                            'a': '#10b981',
+                            'b': '#3b82f6', 
+                            'c': '#f59e0b',
+                            'd': '#f97316',
+                            'f': '#ef4444',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3, .font-display { font-family: 'Space Grotesk', sans-serif; }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .grade-badge {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        
+        .float-animation {
+            animation: float 3s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const API_BASE = 'http://localhost:8000';
+        
+        // Grade color mapping
+        const getGradeColor = (grade) => {
+            if (!grade) return 'bg-gray-200 text-gray-600';
+            const letter = grade.charAt(0).toUpperCase();
+            const colors = {
+                'A': 'bg-emerald-500 text-white',
+                'B': 'bg-blue-500 text-white',
+                'C': 'bg-amber-500 text-white',
+                'D': 'bg-orange-500 text-white',
+                'F': 'bg-red-500 text-white',
+            };
+            return colors[letter] || 'bg-gray-200 text-gray-600';
+        };
+        
+        const getGradeBg = (grade) => {
+            if (!grade) return 'from-gray-100 to-gray-200';
+            const letter = grade.charAt(0).toUpperCase();
+            const colors = {
+                'A': 'from-emerald-50 to-emerald-100 border-emerald-200',
+                'B': 'from-blue-50 to-blue-100 border-blue-200',
+                'C': 'from-amber-50 to-amber-100 border-amber-200',
+                'D': 'from-orange-50 to-orange-100 border-orange-200',
+                'F': 'from-red-50 to-red-100 border-red-200',
+            };
+            return colors[letter] || 'from-gray-100 to-gray-200';
+        };
+
+        // Grade Badge Component
+        const GradeBadge = ({ grade, size = 'md' }) => {
+            const sizeClasses = {
+                'sm': 'w-10 h-10 text-lg',
+                'md': 'w-14 h-14 text-2xl',
+                'lg': 'w-20 h-20 text-4xl',
+            };
+            
+            return (
+                <div className={`${sizeClasses[size]} ${getGradeColor(grade)} rounded-xl flex items-center justify-center grade-badge shadow-lg`}>
+                    {grade || '?'}
+                </div>
+            );
+        };
+
+        // Score Bar Component
+        const ScoreBar = ({ score, label }) => {
+            const width = score ? `${score * 10}%` : '0%';
+            const color = score >= 8 ? 'bg-emerald-500' : score >= 6 ? 'bg-blue-500' : score >= 4 ? 'bg-amber-500' : 'bg-red-500';
+            
+            return (
+                <div className="space-y-1">
+                    <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">{label}</span>
+                        <span className="font-semibold">{score ? score.toFixed(1) : 'N/A'}</span>
+                    </div>
+                    <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className={`h-full ${color} rounded-full transition-all duration-500`} style={{ width }} />
+                    </div>
+                </div>
+            );
+        };
+
+        // Search Component
+        const SearchBar = ({ onSearch, value, onChange }) => (
+            <div className="relative">
+                <input
+                    type="text"
+                    placeholder="Search supplements, devices, protocols..."
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && onSearch()}
+                    className="w-full px-6 py-4 text-lg rounded-2xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none transition-colors bg-white shadow-sm"
+                />
+                <button 
+                    onClick={onSearch}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-6 py-2 rounded-xl font-semibold hover:opacity-90 transition-opacity"
+                >
+                    Search
+                </button>
+            </div>
+        );
+
+        // Trend Card Component
+        const TrendCard = ({ trend, onClick }) => (
+            <div 
+                onClick={() => onClick(trend.slug)}
+                className={`bg-gradient-to-br ${getGradeBg(trend.evidence_grade)} rounded-2xl p-6 border cursor-pointer hover:shadow-lg transition-all hover:-translate-y-1`}
+            >
+                <div className="flex justify-between items-start mb-4">
+                    <div>
+                        <h3 className="font-display font-bold text-xl text-gray-900">{trend.name}</h3>
+                        <span className="text-sm text-gray-500">{trend.category}</span>
+                    </div>
+                    <GradeBadge grade={trend.evidence_grade} size="sm" />
+                </div>
+                <p className="text-gray-600 text-sm line-clamp-2">{trend.description}</p>
+                {trend.overall_score && (
+                    <div className="mt-4">
+                        <ScoreBar score={trend.overall_score} label="Evidence Score" />
+                    </div>
+                )}
+            </div>
+        );
+
+        // Study Card Component
+        const StudyCard = ({ study }) => (
+            <a 
+                href={`https://pubmed.ncbi.nlm.nih.gov/${study.pubmed_id}/`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block bg-white rounded-lg p-4 border border-gray-200 hover:border-purple-300 hover:shadow-md transition-all"
+            >
+                <div className="flex justify-between items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                        <h5 className="font-medium text-gray-900 text-sm line-clamp-2 mb-2">{study.title}</h5>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                            <span className={`px-2 py-0.5 rounded-full ${
+                                study.study_type === 'meta_analysis' ? 'bg-purple-100 text-purple-700' :
+                                study.study_type === 'rct' ? 'bg-emerald-100 text-emerald-700' :
+                                study.study_type === 'review' ? 'bg-blue-100 text-blue-700' :
+                                'bg-gray-100 text-gray-600'
+                            }`}>
+                                {study.study_type?.replace('_', '-') || 'unknown'}
+                            </span>
+                            {study.is_human_study && (
+                                <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full">human</span>
+                            )}
+                            {study.sample_size && (
+                                <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">n={study.sample_size}</span>
+                            )}
+                            {study.publication_year && (
+                                <span className="text-gray-400">{study.publication_year}</span>
+                            )}
+                        </div>
+                    </div>
+                    <svg className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                </div>
+                <p className="text-xs text-gray-500 mt-2 truncate">{study.journal}</p>
+            </a>
+        );
+
+        // Claim Card Component (now expandable)
+        const ClaimCard = ({ claim, onExpand, isExpanded, studies, loadingStudies }) => (
+            <div className={`bg-gradient-to-br ${getGradeBg(claim.evidence_grade)} rounded-xl border overflow-hidden`}>
+                <div 
+                    className="p-5 cursor-pointer hover:bg-white/20 transition-colors"
+                    onClick={() => onExpand(claim.id)}
+                >
+                    <div className="flex justify-between items-start gap-4">
+                        <div className="flex-1">
+                            <h4 className="font-semibold text-gray-900 mb-1">{claim.claim_text}</h4>
+                            {claim.summary && (
+                                <p className="text-sm text-gray-600 mb-3">{claim.summary}</p>
+                            )}
+                            <div className="flex flex-wrap gap-2 text-xs text-gray-500">
+                                {claim.num_meta_analyses > 0 && (
+                                    <span className="bg-white/50 px-2 py-1 rounded-full">
+                                        {claim.num_meta_analyses} meta-analyses
+                                    </span>
+                                )}
+                                {claim.num_human_rcts > 0 && (
+                                    <span className="bg-white/50 px-2 py-1 rounded-full">
+                                        {claim.num_human_rcts} RCTs
+                                    </span>
+                                )}
+                                {claim.evidence_score && (
+                                    <span className="bg-white/50 px-2 py-1 rounded-full">
+                                        Click to see studies ↓
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <GradeBadge grade={claim.evidence_grade} size="sm" />
+                    </div>
+                </div>
+                
+                {/* Expanded Studies Section */}
+                {isExpanded && (
+                    <div className="bg-gray-50 border-t p-4">
+                        <h5 className="font-semibold text-gray-700 text-sm mb-3">
+                            📚 Studies ({studies?.length || 0})
+                        </h5>
+                        {loadingStudies ? (
+                            <div className="text-center py-4 text-gray-500 text-sm">Loading studies...</div>
+                        ) : studies && studies.length > 0 ? (
+                            <div className="space-y-2 max-h-64 overflow-y-auto">
+                                {studies.map(study => (
+                                    <StudyCard key={study.pubmed_id} study={study} />
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-sm text-gray-500 text-center py-4">
+                                No studies indexed yet for this claim.
+                            </p>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+
+        // Trend Detail Modal
+        const TrendDetail = ({ trend, onClose }) => {
+            const [expandedClaim, setExpandedClaim] = React.useState(null);
+            const [claimStudies, setClaimStudies] = React.useState({});
+            const [loadingStudies, setLoadingStudies] = React.useState(false);
+            
+            if (!trend) return null;
+            
+            const handleExpandClaim = async (claimId) => {
+                if (expandedClaim === claimId) {
+                    setExpandedClaim(null);
+                    return;
+                }
+                
+                setExpandedClaim(claimId);
+                
+                // Fetch studies if not already loaded
+                if (!claimStudies[claimId]) {
+                    setLoadingStudies(true);
+                    try {
+                        const res = await fetch(`${API_BASE}/claims/${claimId}`);
+                        const data = await res.json();
+                        setClaimStudies(prev => ({ ...prev, [claimId]: data.studies || [] }));
+                    } catch (err) {
+                        console.error('Failed to fetch studies:', err);
+                        setClaimStudies(prev => ({ ...prev, [claimId]: [] }));
+                    }
+                    setLoadingStudies(false);
+                }
+            };
+            
+            return (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+                    <div 
+                        className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        {/* Header */}
+                        <div className={`bg-gradient-to-br ${getGradeBg(trend.evidence_grade)} p-8 rounded-t-3xl`}>
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <span className="text-sm font-medium text-gray-500 uppercase tracking-wide">
+                                        {trend.category}
+                                    </span>
+                                    <h2 className="font-display font-bold text-3xl text-gray-900 mt-1">
+                                        {trend.name}
+                                    </h2>
+                                    {trend.aliases && trend.aliases.length > 0 && (
+                                        <p className="text-sm text-gray-500 mt-2">
+                                            Also known as: {trend.aliases.join(', ')}
+                                        </p>
+                                    )}
+                                </div>
+                                <GradeBadge grade={trend.evidence_grade} size="lg" />
+                            </div>
+                            
+                            {trend.overall_score && (
+                                <div className="mt-6">
+                                    <div className="flex items-baseline gap-2">
+                                        <span className="text-5xl font-display font-bold text-gray-900">
+                                            {trend.overall_score.toFixed(1)}
+                                        </span>
+                                        <span className="text-gray-500">/ 10</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Content */}
+                        <div className="p-8">
+                            <p className="text-gray-600 mb-8">{trend.description}</p>
+                            
+                            {/* Claims */}
+                            <h3 className="font-display font-bold text-xl mb-4">Claims Analyzed</h3>
+                            <div className="space-y-3">
+                                {trend.claims && trend.claims.map(claim => (
+                                    <ClaimCard 
+                                        key={claim.id} 
+                                        claim={claim}
+                                        onExpand={handleExpandClaim}
+                                        isExpanded={expandedClaim === claim.id}
+                                        studies={claimStudies[claim.id]}
+                                        loadingStudies={loadingStudies && expandedClaim === claim.id}
+                                    />
+                                ))}
+                            </div>
+                            
+                            {/* Close button */}
+                            <button 
+                                onClick={onClose}
+                                className="mt-8 w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-semibold transition-colors"
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Category Filter
+        const CategoryFilter = ({ categories, selected, onSelect }) => (
+            <div className="flex flex-wrap gap-2">
+                <button
+                    onClick={() => onSelect(null)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                        !selected ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                >
+                    All
+                </button>
+                {categories.map(cat => (
+                    <button
+                        key={cat.id}
+                        onClick={() => onSelect(cat.name)}
+                        className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                            selected === cat.name ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                    >
+                        {cat.icon} {cat.name}
+                    </button>
+                ))}
+            </div>
+        );
+
+        // Stats Banner
+        const StatsBanner = ({ stats }) => (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {[
+                    { label: 'Trends Tracked', value: stats.total_trends },
+                    { label: 'Claims Analyzed', value: stats.total_claims },
+                    { label: 'Studies Indexed', value: stats.total_studies },
+                    { label: 'Categories', value: Object.keys(stats.trends_by_category || {}).length },
+                ].map(stat => (
+                    <div key={stat.label} className="bg-white rounded-2xl p-4 text-center shadow-sm">
+                        <div className="text-3xl font-display font-bold text-gray-900">{stat.value || 0}</div>
+                        <div className="text-sm text-gray-500">{stat.label}</div>
+                    </div>
+                ))}
+            </div>
+        );
+
+        // Main App Component
+        const App = () => {
+            const [trends, setTrends] = React.useState([]);
+            const [categories, setCategories] = React.useState([]);
+            const [stats, setStats] = React.useState({});
+            const [selectedTrend, setSelectedTrend] = React.useState(null);
+            const [selectedCategory, setSelectedCategory] = React.useState(null);
+            const [searchQuery, setSearchQuery] = React.useState('');
+            const [loading, setLoading] = React.useState(true);
+            const [error, setError] = React.useState(null);
+
+            // Fetch initial data
+            React.useEffect(() => {
+                const fetchData = async () => {
+                    try {
+                        const [trendsRes, catsRes, statsRes] = await Promise.all([
+                            fetch(`${API_BASE}/trends`),
+                            fetch(`${API_BASE}/categories`),
+                            fetch(`${API_BASE}/stats`),
+                        ]);
+                        
+                        if (!trendsRes.ok) throw new Error('Failed to fetch trends');
+                        
+                        setTrends(await trendsRes.json());
+                        setCategories(await catsRes.json());
+                        setStats(await statsRes.json());
+                        setLoading(false);
+                    } catch (err) {
+                        setError(err.message);
+                        setLoading(false);
+                    }
+                };
+                
+                fetchData();
+            }, []);
+
+            // Fetch trend detail
+            const handleTrendClick = async (slug) => {
+                try {
+                    const res = await fetch(`${API_BASE}/trends/${slug}`);
+                    if (!res.ok) throw new Error('Failed to fetch trend');
+                    setSelectedTrend(await res.json());
+                } catch (err) {
+                    console.error(err);
+                }
+            };
+
+            // Search
+            const handleSearch = async () => {
+                if (!searchQuery.trim()) {
+                    // Reset to all trends
+                    const res = await fetch(`${API_BASE}/trends`);
+                    setTrends(await res.json());
+                    return;
+                }
+                
+                try {
+                    const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(searchQuery)}`);
+                    const data = await res.json();
+                    setTrends(data.trends);
+                } catch (err) {
+                    console.error(err);
+                }
+            };
+
+            // Filter by category
+            React.useEffect(() => {
+                const fetchFiltered = async () => {
+                    const url = selectedCategory 
+                        ? `${API_BASE}/trends?category=${encodeURIComponent(selectedCategory)}`
+                        : `${API_BASE}/trends`;
+                    const res = await fetch(url);
+                    setTrends(await res.json());
+                };
+                
+                if (!loading) fetchFiltered();
+            }, [selectedCategory]);
+
+            if (loading) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="w-16 h-16 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                            <p className="text-gray-500">Loading evidence data...</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (error) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center">
+                        <div className="text-center text-red-500">
+                            <p className="text-xl font-semibold mb-2">Connection Error</p>
+                            <p className="text-gray-500">Make sure the API is running at {API_BASE}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen">
+                    {/* Hero Section */}
+                    <div className="bg-gradient-to-br from-purple-900 via-indigo-900 to-purple-800 text-white">
+                        <div className="max-w-6xl mx-auto px-6 py-16">
+                            <div className="text-center mb-12">
+                                <h1 className="font-display text-5xl md:text-6xl font-bold mb-4">
+                                    Is This Health Trend <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-orange-500">Bullshit?</span>
+                                </h1>
+                                <p className="text-xl text-purple-200 max-w-2xl mx-auto">
+                                    Evidence-based ratings for supplements, devices, and wellness protocols. 
+                                    Know what works before you waste your money.
+                                </p>
+                            </div>
+                            
+                            <div className="max-w-2xl mx-auto">
+                                <SearchBar 
+                                    value={searchQuery}
+                                    onChange={setSearchQuery}
+                                    onSearch={handleSearch}
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <div className="max-w-6xl mx-auto px-6 py-12">
+                        {/* Stats */}
+                        <div className="mb-12 -mt-8">
+                            <StatsBanner stats={stats} />
+                        </div>
+
+                        {/* Category Filter */}
+                        <div className="mb-8">
+                            <CategoryFilter 
+                                categories={categories}
+                                selected={selectedCategory}
+                                onSelect={setSelectedCategory}
+                            />
+                        </div>
+
+                        {/* Trends Grid */}
+                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {trends.map(trend => (
+                                <TrendCard 
+                                    key={trend.id} 
+                                    trend={trend} 
+                                    onClick={handleTrendClick}
+                                />
+                            ))}
+                        </div>
+
+                        {trends.length === 0 && (
+                            <div className="text-center py-12 text-gray-500">
+                                No trends found. Try a different search or category.
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Footer */}
+                    <footer className="bg-gray-900 text-gray-400 py-12 mt-12">
+                        <div className="max-w-6xl mx-auto px-6 text-center">
+                            <p className="mb-2">Data sourced from PubMed. Scores generated algorithmically.</p>
+                            <p className="text-sm">This is not medical advice. Consult a healthcare provider.</p>
+                        </div>
+                    </footer>
+
+                    {/* Trend Detail Modal */}
+                    {selectedTrend && (
+                        <TrendDetail 
+                            trend={selectedTrend} 
+                            onClose={() => setSelectedTrend(null)} 
+                        />
+                    )}
+                </div>
+            );
+        };
+
+        // Render
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

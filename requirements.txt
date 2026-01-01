@@ -1,0 +1,27 @@
+# Health Trends Evidence Tracker
+# Python dependencies
+
+# Database
+asyncpg>=0.29.0
+python-dotenv>=1.0.0
+
+# HTTP/API
+aiohttp>=3.9.1
+
+# Web framework (for API)
+fastapi>=0.109.0
+uvicorn[standard]>=0.25.0
+pydantic>=2.5.0
+
+# Data processing (optional, for analysis)
+# pandas>=2.1.4
+
+# For Google Trends (optional, may need workarounds)
+# pytrends>=4.9.2
+
+# Reddit API (optional)
+# praw>=7.7.1
+
+# Testing
+pytest>=7.4.4
+pytest-asyncio>=0.23.3
