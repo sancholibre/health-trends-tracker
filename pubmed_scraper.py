@@ -3,6 +3,11 @@ PubMed Scraper for Health Trends Evidence Tracker
 Uses NCBI E-utilities API (free, no key required for low volume)
 
 Documentation: https://www.ncbi.nlm.nih.gov/books/NBK25500/
+
+Updated: Added relevance filtering to remove studies that don't actually
+mention the supplement/intervention being searched.
+
+Fixed: Added defensive None checks in _parse_article to prevent NoneType errors
 """
 
 import asyncio
@@ -44,6 +49,9 @@ class PubMedStudy:
     sample_size: Optional[int] = None
     keywords: list[str] = field(default_factory=list)
     mesh_terms: list[str] = field(default_factory=list)
+    # NEW: Relevance metadata
+    relevance_score: Optional[float] = None
+    relevance_matched_terms: list[str] = field(default_factory=list)
     
     def to_dict(self) -> dict:
         """Convert to dictionary for database insertion"""
@@ -62,6 +70,153 @@ class PubMedStudy:
             'keywords': self.keywords,
             'mesh_terms': self.mesh_terms
         }
+
+
+# =============================================================================
+# Relevance Filter (integrated)
+# =============================================================================
+
+class RelevanceFilter:
+    """
+    Filters PubMed studies based on whether they actually mention
+    the supplement/intervention being researched.
+    
+    This catches garbage results like "PD-1 inhibition on ground glass opacity"
+    when searching for "grounding mats".
+    """
+    
+    # Common false-positive terms that appear in unrelated contexts
+    NOISE_PATTERNS = [
+        r'\bground\s+truth\b',           # ML terminology
+        r'\bgrounding\s+electrode\b',     # Medical equipment
+        r'\belectrical\s+ground\b',       # Equipment safety
+        r'\bbackground\b',                # Study background sections
+        r'\bgrounded\s+theory\b',         # Research methodology
+        r'\bground\s+glass\b',            # Radiology finding (lung opacities)
+        r'\bground-glass\b',              # Same, hyphenated
+    ]
+    
+    def __init__(self, min_relevance_score: float = 0.3):
+        """
+        Args:
+            min_relevance_score: Minimum score (0-1) to consider a study relevant.
+                                 0.3 = at least found in abstract once
+                                 0.5 = found in title OR multiple abstract mentions
+        """
+        self.min_relevance_score = min_relevance_score
+        self.noise_patterns = [re.compile(p, re.IGNORECASE) for p in self.NOISE_PATTERNS]
+    
+    def filter_studies(
+        self,
+        studies: list[PubMedStudy],
+        supplement_name: str,
+        aliases: Optional[list[str]] = None
+    ) -> list[PubMedStudy]:
+        """
+        Filter studies to only those that actually mention the supplement.
+        
+        Args:
+            studies: List of PubMedStudy objects
+            supplement_name: Primary name (e.g., "grounding mats")
+            aliases: Alternative names (e.g., ["earthing", "earthing mats"])
+            
+        Returns:
+            List of studies that pass the relevance threshold
+        """
+        search_terms = self._build_search_terms(supplement_name, aliases)
+        
+        relevant = []
+        filtered_count = 0
+        
+        for study in studies:
+            # Skip None entries
+            if study is None:
+                filtered_count += 1
+                continue
+                
+            score, matched_terms = self._score_study(study, search_terms)
+            
+            if score >= self.min_relevance_score:
+                # Attach relevance metadata
+                study.relevance_score = score
+                study.relevance_matched_terms = matched_terms
+                relevant.append(study)
+            else:
+                filtered_count += 1
+                logger.debug(f"Filtered out (score={score:.2f}): {study.title[:60]}...")
+        
+        if filtered_count > 0:
+            logger.info(f"Relevance filter: kept {len(relevant)}, removed {filtered_count} irrelevant studies")
+        
+        return relevant
+    
+    def _build_search_terms(
+        self,
+        supplement_name: str,
+        aliases: Optional[list[str]]
+    ) -> set[str]:
+        """Build set of terms to search for, normalized to lowercase."""
+        terms = {supplement_name.lower()}
+        if aliases:
+            terms.update(a.lower() for a in aliases)
+        return terms
+    
+    def _score_study(
+        self,
+        study: PubMedStudy,
+        search_terms: set[str]
+    ) -> tuple[float, list[str]]:
+        """
+        Score a study's relevance based on term presence and location.
+        
+        Scoring weights:
+        - Title match: 0.5
+        - Abstract match: 0.3 per unique term (max 0.6)
+        - MeSH term match: 0.2
+        
+        Returns:
+            (score, list of matched terms)
+        """
+        title = (study.title or '').lower()
+        abstract = (study.abstract or '').lower()
+        mesh = ' '.join(study.mesh_terms or []).lower()
+        
+        score = 0.0
+        matched_terms = []
+        
+        for term in search_terms:
+            # Use word boundary matching to avoid partial matches
+            # e.g., "ground" shouldn't match "background"
+            pattern = re.compile(r'\b' + re.escape(term) + r'\b', re.IGNORECASE)
+            
+            term_matched = False
+            
+            if pattern.search(title):
+                score += 0.5
+                term_matched = True
+            
+            abstract_matches = len(pattern.findall(abstract))
+            if abstract_matches > 0:
+                # Diminishing returns for multiple abstract mentions
+                abstract_score = min(0.3 * abstract_matches, 0.6)
+                score += abstract_score
+                term_matched = True
+            
+            if pattern.search(mesh):
+                score += 0.2
+                term_matched = True
+            
+            if term_matched:
+                matched_terms.append(term)
+        
+        # Cap at 1.0
+        score = min(score, 1.0)
+        
+        # If no terms matched at all, score is 0
+        if not matched_terms:
+            score = 0.0
+        
+        return score, matched_terms
 
 
 class PubMedScraper:
@@ -207,7 +362,7 @@ class PubMedScraper:
         for article in root.findall('.//PubmedArticle'):
             try:
                 study = self._parse_article(article)
-                if study:
+                if study is not None:  # Explicit None check
                     studies.append(study)
             except Exception as e:
                 logger.error(f"Error parsing article: {e}")
@@ -218,15 +373,26 @@ class PubMedScraper:
     def _parse_article(self, article: ET.Element) -> Optional[PubMedStudy]:
         """Parse a single PubmedArticle element"""
         
-        # Get PMID
+        # =================================================================
+        # FIX: Defensive None checks for PMID element AND its text content
+        # =================================================================
         pmid_elem = article.find('.//PMID')
-        if pmid_elem is None:
+        if pmid_elem is None or pmid_elem.text is None:
+            logger.debug("Skipping article: missing PMID")
             return None
-        pmid = pmid_elem.text
+        pmid = pmid_elem.text.strip()
+        if not pmid:  # Empty string check
+            logger.debug("Skipping article: empty PMID")
+            return None
         
-        # Get title
+        # =================================================================
+        # FIX: Defensive None check for title element AND its text content
+        # =================================================================
         title_elem = article.find('.//ArticleTitle')
-        title = title_elem.text if title_elem is not None else "No title"
+        if title_elem is not None and title_elem.text is not None:
+            title = title_elem.text.strip()
+        else:
+            title = "No title"
         
         # Get abstract
         abstract_parts = []
@@ -244,15 +410,15 @@ class PubMedScraper:
         for author in article.findall('.//Author'):
             lastname = author.find('LastName')
             forename = author.find('ForeName')
-            if lastname is not None:
+            if lastname is not None and lastname.text:
                 name = lastname.text
-                if forename is not None:
+                if forename is not None and forename.text:
                     name = f"{forename.text} {name}"
                 authors.append(name)
         
         # Get journal
         journal_elem = article.find('.//Journal/Title')
-        journal = journal_elem.text if journal_elem is not None else None
+        journal = journal_elem.text if journal_elem is not None and journal_elem.text else None
         
         # Get publication date
         pub_date = None
@@ -263,32 +429,37 @@ class PubMedScraper:
         month_elem = article.find('.//PubDate/Month')
         day_elem = article.find('.//PubDate/Day')
         
-        if year_elem is not None:
-            pub_year = int(year_elem.text)
-            month = 1
-            day = 1
-            
-            if month_elem is not None:
-                month_text = month_elem.text
-                # Handle month names
-                month_map = {
-                    'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
-                    'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
-                }
-                month = month_map.get(month_text, int(month_text) if month_text.isdigit() else 1)
-            
-            if day_elem is not None and day_elem.text.isdigit():
-                day = int(day_elem.text)
-            
+        if year_elem is not None and year_elem.text:
             try:
-                pub_date = datetime(pub_year, month, day)
+                pub_year = int(year_elem.text)
             except ValueError:
-                pub_date = datetime(pub_year, 1, 1)
+                pub_year = None
+            
+            if pub_year:
+                month = 1
+                day = 1
+                
+                if month_elem is not None and month_elem.text:
+                    month_text = month_elem.text
+                    # Handle month names
+                    month_map = {
+                        'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+                        'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
+                    }
+                    month = month_map.get(month_text, int(month_text) if month_text.isdigit() else 1)
+                
+                if day_elem is not None and day_elem.text and day_elem.text.isdigit():
+                    day = int(day_elem.text)
+                
+                try:
+                    pub_date = datetime(pub_year, month, day)
+                except ValueError:
+                    pub_date = datetime(pub_year, 1, 1)
         
         # Get DOI
         doi = None
         for article_id in article.findall('.//ArticleId'):
-            if article_id.get('IdType') == 'doi':
+            if article_id.get('IdType') == 'doi' and article_id.text:
                 doi = article_id.text
                 break
         
@@ -447,7 +618,10 @@ class PubMedScraper:
         for i in range(0, len(pmids), batch_size):
             batch = pmids[i:i + batch_size]
             studies = await self.fetch_details(batch)
-            all_studies.extend(studies)
+            # =================================================================
+            # FIX: Filter out None entries before extending
+            # =================================================================
+            all_studies.extend([s for s in studies if s is not None])
         
         return all_studies
 
@@ -460,17 +634,28 @@ class HealthClaimSearcher:
     """
     Higher-level class for searching health claims.
     Builds optimized queries for different types of claims.
+    
+    Now includes relevance filtering to remove garbage results.
     """
     
-    def __init__(self, scraper: Optional[PubMedScraper] = None):
+    def __init__(
+        self,
+        scraper: Optional[PubMedScraper] = None,
+        relevance_filter: Optional[RelevanceFilter] = None,
+        enable_relevance_filter: bool = True,
+        min_relevance_score: float = 0.3
+    ):
         self.scraper = scraper or PubMedScraper()
+        self.enable_relevance_filter = enable_relevance_filter
+        self.relevance_filter = relevance_filter or RelevanceFilter(min_relevance_score)
     
     async def search_supplement_claim(
         self,
         supplement_name: str,
         claim: str,
         aliases: Optional[list[str]] = None,
-        max_results: int = 30
+        max_results: int = 30,
+        filter_relevance: Optional[bool] = None  # Override instance setting
     ) -> list[PubMedStudy]:
         """
         Search for studies about a supplement's claimed benefit.
@@ -480,6 +665,7 @@ class HealthClaimSearcher:
             claim: The health claim (e.g., "reduces anxiety")
             aliases: Alternative names for the supplement
             max_results: Maximum results to return
+            filter_relevance: Override instance-level relevance filtering
         """
         # Build name query with aliases
         names = [supplement_name]
@@ -496,7 +682,28 @@ class HealthClaimSearcher:
         
         logger.info(f"Searching: {query}")
         
-        return await self.scraper.search_and_fetch(query, max_results)
+        # Fetch more than needed since we'll filter some out
+        should_filter = filter_relevance if filter_relevance is not None else self.enable_relevance_filter
+        fetch_count = max_results * 2 if should_filter else max_results
+        
+        studies = await self.scraper.search_and_fetch(query, fetch_count)
+        
+        # =================================================================
+        # FIX: Additional None filtering before relevance filter
+        # =================================================================
+        studies = [s for s in studies if s is not None]
+        
+        # Apply relevance filter
+        if should_filter and studies:
+            studies = self.relevance_filter.filter_studies(
+                studies,
+                supplement_name=supplement_name,
+                aliases=aliases
+            )
+            # Trim to requested max
+            studies = studies[:max_results]
+        
+        return studies
     
     def _parse_claim(self, claim: str) -> list[str]:
         """Convert a claim into search terms"""
@@ -554,6 +761,9 @@ class HealthClaimSearcher:
         # Filter results
         filtered = []
         for study in studies:
+            # Skip None entries
+            if study is None:
+                continue
             if human_only and not study.is_human_study:
                 continue
             if study_types and study.study_type not in study_types:
@@ -568,11 +778,48 @@ class HealthClaimSearcher:
 # =============================================================================
 
 async def main():
-    """Test the scraper"""
+    """Test the scraper with relevance filtering"""
     scraper = PubMedScraper()
-    searcher = HealthClaimSearcher(scraper)
+    searcher = HealthClaimSearcher(scraper, enable_relevance_filter=True)
     
-    # Example: Search for tongkat ali testosterone studies
+    # Test case: Grounding mats (known to pull in garbage without filtering)
+    print("\n" + "="*60)
+    print("Searching: Grounding Mats + Inflammation (WITH relevance filter)")
+    print("="*60)
+    
+    studies = await searcher.search_supplement_claim(
+        supplement_name="grounding mats",
+        claim="reduces inflammation",
+        aliases=["earthing mats", "earthing", "grounding therapy", "earthing therapy"],
+        max_results=20
+    )
+    
+    print(f"\nFound {len(studies)} relevant studies:")
+    for study in studies[:10]:
+        score = study.relevance_score or 0
+        matched = ', '.join(study.relevance_matched_terms) if study.relevance_matched_terms else 'none'
+        print(f"\n[{study.pubmed_id}] {study.title[:70]}...")
+        print(f"  Type: {study.study_type} | Human: {study.is_human_study} | N={study.sample_size}")
+        print(f"  Relevance: {score:.2f} | Matched: {matched}")
+    
+    # Compare: without filtering
+    print("\n" + "="*60)
+    print("Searching: Grounding Mats + Inflammation (WITHOUT filter)")
+    print("="*60)
+    
+    searcher_no_filter = HealthClaimSearcher(scraper, enable_relevance_filter=False)
+    studies_unfiltered = await searcher_no_filter.search_supplement_claim(
+        supplement_name="grounding mats",
+        claim="reduces inflammation",
+        aliases=["earthing mats", "earthing", "grounding therapy"],
+        max_results=20
+    )
+    
+    print(f"\nFound {len(studies_unfiltered)} studies (unfiltered):")
+    for study in studies_unfiltered[:5]:
+        print(f"  - {study.title[:70]}...")
+    
+    # Standard test: Tongkat Ali
     print("\n" + "="*60)
     print("Searching: Tongkat Ali + Testosterone")
     print("="*60)
@@ -591,25 +838,6 @@ async def main():
         print(f"  Year: {study.publication_year}")
     
     print(f"\nTotal: {len(studies)} studies found")
-    
-    # Example: Search for ashwagandha anxiety (more researched)
-    print("\n" + "="*60)
-    print("Searching: Ashwagandha + Anxiety (RCTs only)")
-    print("="*60)
-    
-    studies = await searcher.search_with_quality_filter(
-        supplement_name="ashwagandha",
-        claim="reduces anxiety",
-        aliases=["withania somnifera"],
-        human_only=True
-    )
-    
-    rcts = [s for s in studies if s.study_type == 'rct']
-    print(f"\nFound {len(studies)} human studies, {len(rcts)} RCTs")
-    
-    for study in rcts[:5]:
-        print(f"\n[{study.pubmed_id}] {study.title[:80]}...")
-        print(f"  N={study.sample_size} | Year: {study.publication_year}")
 
 
 if __name__ == "__main__":

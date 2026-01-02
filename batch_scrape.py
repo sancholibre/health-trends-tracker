@@ -94,14 +94,15 @@ def study_to_summary(study) -> StudySummary:
         'animal': StudyType.ANIMAL,
         'in_vitro': StudyType.IN_VITRO,
         'clinical_trial': StudyType.RCT,
-        'unknown': StudyType.UNKNOWN
+        'unknown': StudyType.UNKNOWN,
+        None: StudyType.UNKNOWN  # Handle None study_type
     }
     return StudySummary(
         study_type=type_map.get(study.study_type, StudyType.UNKNOWN),
-        is_human=study.is_human_study,
+        is_human=study.is_human_study or False,
         sample_size=study.sample_size,
         publication_year=study.publication_year,
-        supports_claim='yes'  # Default assumption
+        supports_claim='yes'
     )
 
 
@@ -123,6 +124,11 @@ async def scrape_claim(conn, scraper, searcher, scorer, trend_name: str, trend_s
             max_results=100  # Increased from 20 to capture more studies
         )
         
+        # =================================================================
+        # FIX: Filter out None/invalid entries that cause downstream errors
+        # =================================================================
+        studies = [s for s in studies if s is not None and s.pubmed_id is not None]
+
         print(f"     Found: {len(studies)} studies")
         
         if not studies:
@@ -184,6 +190,10 @@ async def scrape_claim(conn, scraper, searcher, scorer, trend_name: str, trend_s
         
         # Save studies and link to claim
         for study in studies:
+            # Skip any studies with missing required fields
+            if not study.pubmed_id or not study.title:
+                continue
+                
             study_id = await conn.fetchval("""
                 INSERT INTO studies (pubmed_id, title, journal, publication_year, 
                                     study_type, is_human_study, sample_size, abstract)
@@ -211,6 +221,8 @@ async def scrape_claim(conn, scraper, searcher, scorer, trend_name: str, trend_s
         
     except Exception as e:
         print(f"     ❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def scrape_trend(conn, scraper, searcher, scorer, trend: dict, dry_run: bool = False):
